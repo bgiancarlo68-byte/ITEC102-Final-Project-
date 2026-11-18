@@ -47,8 +47,9 @@ class Program
     static readonly string attendanceFile = "attendance.json";
 
     // ---------- SETTINGS ----------
-    // Logging in within this many minutes after the class starts = Present.
-    // After that (until the class ends) = Late.
+    // Logging in on or before the class start time = Present.
+    // Logging in after the class start, up to this many minutes = Late.
+    // After this many minutes the student can no longer log in = Absent.
     static readonly int GraceMinutes = 15;
 
     // Students may log in this many minutes BEFORE a class starts.
@@ -258,6 +259,9 @@ class Program
         if (slot == null)
         {
             Console.WriteLine("\nNo class is open for log in right now.");
+            Console.WriteLine($"(Log in opens {EarlyLoginMinutes} minutes before class and closes {GraceMinutes} minutes after it starts.");
+            Console.WriteLine(" After that, the student is marked Absent.)");
+
             ClassSlot? next = GetNextClass(now, out DateTime nextStart);
             if (next != null)
             {
@@ -285,8 +289,10 @@ class Program
             return;
         }
 
-        // Status is decided ONLY by the system clock
-        string status = now <= classStart.AddMinutes(GraceMinutes) ? "Present" : "Late";
+        // Status is decided ONLY by the system clock:
+        //   on or before class start             = Present
+        //   after start, up to 15 minutes after  = Late
+        string status = now <= classStart ? "Present" : "Late";
 
         records.Add(new AttendanceRecord
         {
@@ -305,7 +311,8 @@ class Program
         Pause();
     }
 
-    // Returns the class the student can log in to right now (or null)
+    // Returns the class the student can log in to right now (or null).
+    // The log in window is: [start - EarlyLoginMinutes] to [start + GraceMinutes].
     static ClassSlot? GetCurrentClass(DateTime now)
     {
         if (!schedule.TryGetValue(now.DayOfWeek, out List<ClassSlot>? slots))
@@ -315,16 +322,9 @@ class Program
 
         TimeSpan t = now.TimeOfDay;
 
-        // 1) A class that is currently ongoing
-        ClassSlot? ongoing = slots.FirstOrDefault(s => t >= s.Start && t < s.End);
-        if (ongoing != null)
-        {
-            return ongoing;
-        }
-
-        // 2) A class about to start (early login window)
         return slots.FirstOrDefault(s =>
-            t < s.Start && s.Start - t <= TimeSpan.FromMinutes(EarlyLoginMinutes));
+            t >= s.Start - TimeSpan.FromMinutes(EarlyLoginMinutes)
+            && t <= s.Start + TimeSpan.FromMinutes(GraceMinutes));
     }
 
     static ClassSlot? GetNextClass(DateTime now, out DateTime start)
@@ -354,7 +354,7 @@ class Program
 
     // =====================================================
     //  AUTOMATIC ABSENCES
-    //  Any class that already ended with no log in = Absent
+    //  Once the 15-minute late window has passed with no log in = Absent
     // =====================================================
     static void MarkAbsences()
     {
@@ -373,10 +373,10 @@ class Program
                 foreach (ClassSlot slot in slots)
                 {
                     DateTime start = day + slot.Start;
-                    DateTime end = day + slot.End;
+                    DateTime lateCutoff = start.AddMinutes(GraceMinutes);
 
-                    // Class not finished yet, or started before the student registered
-                    if (end > now || start < student.RegisteredAt)
+                    // Log in window still open, or class started before the student registered
+                    if (now <= lateCutoff || start < student.RegisteredAt)
                     {
                         continue;
                     }
